@@ -1,0 +1,26 @@
+name: Build binwalk Release Windows
+on: 
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Release Windows-x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          repository: ReFirmLabs/binwalk
+          fetch-depth: 0
+      - name: Build binary
+        uses: houseabsolute/actions-rust-cross@v1
+        with:
+          command: build
+          target: x86_64-pc-windows-msvc
+          args: "--locked --release"
+          strip: true
+      - name: Publish artifacts and release
+        uses: houseabsolute/actions-rust-release@v1
+        with:
+          executable-name: binwalk
+          target: x86_64-pc-windows-msvc
