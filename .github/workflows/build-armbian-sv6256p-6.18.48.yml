@@ -1,0 +1,109 @@
+name: Compile SV6256P
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: "Exact kernel version (e.g. 6.18.48)"
+        required: false
+        default: "6.18.48"
+        type: string
+      kernel_source:
+        description: "Kernel source repository owner"
+        required: false
+        default: "ophub"
+        type: string
+      kernel_tag:
+        description: "Release tag in kernel repo (default: kernel_stable)"
+        required: false
+        default: "kernel_stable"
+        type: string
+      module_repo:
+        description: "SV6256P module repository"
+        required: false
+        default: "cdhigh/armbian_sv6256p"
+        type: string
+      module_ref:
+        description: "SV6256P branch/tag/commit"
+        required: false
+        default: "main"
+        type: string
+
+env:
+  TZ: Etc/UTC
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04-arm
+    if: ${{ github.event.repository.owner.id == github.event.sender.id }}
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout current repository
+        uses: actions/checkout@v7
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev kmod curl tar jq
+          
+      - name: Download and install official kernel headers
+        id: headers
+        run: |
+          set -euo pipefail
+          KVER="${{ inputs.kernel_version }}"
+          TAG="${{ inputs.kernel_tag }}"
+          OWNER="${{ inputs.kernel_source }}"
+
+          TAR_URL="https://github.com/${OWNER}/kernel/releases/download/${TAG}/deb-${KVER}.tar.gz"
+          echo "Fetching headers from: ${TAR_URL}"
+
+          mkdir -p /tmp/kdeb
+          curl -fsSL "${TAR_URL}" -o /tmp/deb-kernel.tar.gz
+          tar -xzf /tmp/deb-kernel.tar.gz -C /tmp/kdeb
+
+          HEADER_DEB=$(find /tmp/kdeb -type f -name "linux-headers*${KVER}*.deb" | head -n 1)
+          if [[ -z "${HEADER_DEB}" ]]; then
+            echo "Error: linux-headers deb not found in archive"
+            exit 1
+          fi
+
+          echo "Extracting headers: ${HEADER_DEB}"
+          sudo dpkg-deb -x "${HEADER_DEB}" /
+
+          KDIR=$(find /usr/src -maxdepth 1 -type d -name "linux-headers*${KVER}*" | head -n 1)
+          if [[ -z "${KDIR}" || ! -d "${KDIR}" ]]; then
+            echo "Error: Target kernel headers directory not found in /usr/src"
+            exit 1
+          fi
+
+          echo "kdir=${KDIR}" >> "$GITHUB_OUTPUT"
+          echo "Installed kernel headers to ${KDIR}"
+
+      - name: Clone SV6256P module repository
+        run: |
+          git clone --depth=1 --branch "${{ inputs.module_ref }}" https://github.com/${{ inputs.module_repo }}.git sv6256p-src
+
+      - name: Build SV6256P module
+        id: build
+        run: |
+          set -euo pipefail
+          KDIR="${{ steps.headers.outputs.kdir }}"
+          MODDIR="$(pwd)/sv6256p-src"
+
+          echo "Compiling against ${KDIR}..."
+          make -C "${KDIR}" M="${MODDIR}" modules -j"$(nproc)"
+
+          mkdir -p out
+          cp -av "${MODDIR}/"*.ko out/
+          modinfo out/ssv6x5x.ko | tee out/modinfo.txt
+          ls -lah out/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sv6256p-${{ inputs.kernel_version }}
+          path: out/*
