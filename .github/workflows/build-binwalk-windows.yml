@@ -1,5 +1,6 @@
 name: Build binwalk Release Windows
-on: 
+
+on:
   workflow_dispatch:
 
 jobs:
@@ -7,20 +8,24 @@ jobs:
     name: Release Windows-x86_64
     runs-on: windows-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
+      - name: Checkout Binwalk source
+        uses: actions/checkout@v4
         with:
           repository: ReFirmLabs/binwalk
           fetch-depth: 0
-      - name: Build binary
-        uses: houseabsolute/actions-rust-cross@v1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          command: build
-          target: x86_64-pc-windows-msvc
-          args: "--locked --release"
-          strip: true
-      - name: Publish artifacts and release
-        uses: houseabsolute/actions-rust-release@v1
+          toolchain: stable-x86_64-pc-windows-msvc
+          targets: x86_64-pc-windows-msvc
+
+      - name: Compile Binwalk
+        run: cargo build --release --locked
+
+      - name: Upload Binwalk artifact
+        uses: actions/upload-artifact@v4
         with:
-          executable-name: binwalk
-          target: x86_64-pc-windows-msvc
+          name: binwalk-windows-x86_64
+          path: target/release/binwalk.exe
+          if-no-files-found: error
