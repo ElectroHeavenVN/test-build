@@ -9,7 +9,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout Binwalk source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ReFirmLabs/binwalk
           fetch-depth: 0
@@ -24,7 +24,7 @@ jobs:
         run: cargo build --release --locked
 
       - name: Upload Binwalk artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: binwalk-windows-x86_64
           path: target/release/binwalk.exe
