@@ -12,7 +12,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           repository: ReFirmLabs/binwalk
-          fetch-depth: 0
+          fetch-depth: 1
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
