@@ -1,0 +1,118 @@
+name: VMPack Android .so
+
+on:
+  workflow_dispatch:
+    inputs:
+      so_url:
+        description: 'URL to .so file'
+        type: string
+        required: true
+      funcs:
+        description: 'Function names to protect, separated by comma'
+        type: string
+        required: true
+        default: ''
+      extra_args:
+        description: 'vmpacker args'
+        type: string
+        required: false
+        default: '-v'
+
+jobs:
+  build:
+    name: Build VMPacker + protect .so
+    runs-on: ubuntu-latest
+    env:
+      SO_URL: ${{ inputs.so_url }}
+      FUNC_LIST: ${{ inputs.funcs }}
+      EXTRA_ARGS: ${{ inputs.extra_args || '-v' }}
+      OUTPUT_NAME: protected.so
+    steps:
+      - name: Checkout VMPacker
+        uses: actions/checkout@v7
+        with:
+          repository: LeoChen-CoreMind/VMPacker
+          fetch-depth: 1
+      - name: Install AArch64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build VM interpreter stub
+        run: |
+          set -euo pipefail
+          mkdir -p build/stub
+          aarch64-linux-gnu-gcc \
+            -c -Os -mcmodel=tiny -fno-stack-protector \
+            -fno-builtin -nostdlib -march=armv8-a \
+            -DVM_INDIRECT_DISPATCH -DVM_FUNC_SPLIT -DVM_TOKEN_ENTRY \
+            stub/linux/arm64/vm_interp.c -o build/stub/vm_interp.o
+
+          aarch64-linux-gnu-ld -T stub/linux/arm64/vm_interp.lds \
+            -o build/stub/vm_interp.elf build/stub/vm_interp.o
+
+          aarch64-linux-gnu-objcopy -O binary \
+            build/stub/vm_interp.elf build/vm_interp_raw.bin
+      - name: Generate vm_interp.bin
+        run: |
+          set -euo pipefail
+          python3 - <<'PYEOF'
+          import struct, subprocess
+
+          nm = subprocess.check_output(
+              ['aarch64-linux-gnu-nm', 'build/stub/vm_interp.elf']
+          ).decode()
+
+          def find_sym(name):
+              for line in nm.splitlines():
+                  parts = line.split()
+                  if len(parts) >= 3 and parts[2] == name:
+                      return int(parts[0], 16)
+              raise ValueError(f'Symbol {name} not found')
+
+          off1 = find_sym('vm_entry')
+          off2 = find_sym('vm_entry_token')
+          off3 = find_sym('_token_table_va')
+          hdr  = struct.pack('<QQQ', off1, off2, off3)
+          raw  = open('build/vm_interp_raw.bin', 'rb').read()
+          blob = hdr + raw
+          open('build/vm_interp.bin', 'wb').write(blob)
+          print(f'[+] vm_interp.bin: {len(blob)} bytes')
+          print(f'    vm_entry=0x{off1:X} vm_entry_token=0x{off2:X} _token_table_va=0x{off3:X}')
+          PYEOF
+
+          cp build/vm_interp.bin cmd/vmpacker/vm_interp.bin
+      - name: Build vmpacker CLI
+        run: |
+          go build -trimpath -ldflags="-s -w" -o vmpacker ./cmd/vmpacker/
+
+      - name: Download .so
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o input.so "${SO_URL}"
+          ls -lh input.so
+
+      - name: Validate input
+        run: |
+          set -euo pipefail
+          file input.so
+          if ! file input.so | grep -Eq 'aarch64|ARM aarch64'; then
+            echo "::error::Input is not an AArch64 ELF (arm64-v8a)"
+            exit 1
+          fi
+          aarch64-linux-gnu-readelf -h input.so | head -n 20
+
+      - name: Run VMPacker
+        run: |
+          set -euo pipefail
+          ./vmpacker -func "${FUNC_LIST}" ${EXTRA_ARGS} -o "${OUTPUT_NAME}" input.so
+
+      - name: Upload protected .so
+        uses: actions/upload-artifact@v4
+        with:
+          name: protected-so
+          path: ${{ env.OUTPUT_NAME }}
+          if-no-files-found: error
